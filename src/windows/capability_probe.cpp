@@ -1,7 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <d3d10.h>
+// Include the 10.1 umbrella first: later SDK headers require this SAL ordering.
+#include <d3d10_1.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <mfapi.h>
