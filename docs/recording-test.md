@@ -52,8 +52,10 @@ Desktop Duplication -> cached D3D11 BGRA desktop texture -> D3D11 video processo
 (scale/letterbox/convert to limited-range BT.709 NV12) -> Media Foundation sink
 writer (hardware H.264 encoding) -> MP4.
 
-The writer enables hardware transforms, disables automatic format converters,
-and passes the capture device manager. Before recording, it inspects the actual
+The writer enables hardware transforms and passes the capture device manager.
+Optional converter-disable and low-latency attributes are omitted while diagnosing
+writer initialization compatibility. Conversion is still performed explicitly on
+the GPU before submission, but additional internal processing is not ruled out. Before recording, it inspects the actual
 selected encoder for the hardware identity attribute and D3D11 awareness. If
 hardware cannot be verified, it stops rather than silently accepting software.
 This does not prove the driver performs no internal copies.
@@ -113,3 +115,18 @@ revision is an unverified fix attempt, not an established root-cause diagnosis.
 Output capabilities, sink creation, and writer creation are reported separately.
 The existing fixed video stream is used without AddStream, and the owned media
 sink is shut down after the writer releases, including on exceptions.
+
+## Writer settings diagnostic revision
+
+`writer-settings-v3` removes the optional converter-disable and low-latency writer
+settings. The test PC successfully created the explicit MP4 sink, but its writer
+initialization still returned E_INVALIDARG. That isolates the failed API call,
+not the root cause. GPU manager and hardware enablement remain required, and the
+selected encoder is still checked before any recording occurs.
+
+If minimal initialization still fails, six independent, in-memory setup checks
+report HRESULTs for no attributes, GPU only, hardware only, both required settings,
+and each optional setting added to the required pair. Each check uses its own
+stream and sink; no encoding or recording is performed by these diagnostics.
+No diagnostic-only configuration is used as a recording fallback. This revision
+still requires building and running on the Windows test PC.

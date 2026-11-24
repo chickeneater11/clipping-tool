@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <ole2.h>
 #include <d3d10_1.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -209,6 +210,45 @@ void verify_hardware(IMFSinkWriter* writer, DWORD stream) {
     throw Failure{"could not verify a hardware video encoder; no software fallback allowed", E_NOTIMPL};
 }
 
+// Each diagnostic uses a fresh in-memory stream and sink. No recording or
+// encoding occurs, and a failed attempt cannot contaminate the next attempt.
+void diagnose_writer_settings(IMFDXGIDeviceManager* manager) {
+    struct Case { const char* name; bool gpu, hardware, converters_off, low_latency; };
+    const Case cases[] = {
+        {"no attributes", false, false, false, false},
+        {"GPU manager only", true, false, false, false},
+        {"hardware flag only", false, true, false, false},
+        {"GPU + hardware (recording settings)", true, true, false, false},
+        {"GPU + hardware + converters disabled", true, true, true, false},
+        {"GPU + hardware + low latency", true, true, false, true}
+    };
+    for (const auto& test : cases) {
+        try {
+            ComPtr<IStream> memory;
+            check(CreateStreamOnHGlobal(nullptr, TRUE, &memory), "diagnostic memory stream");
+            ComPtr<IMFByteStream> bytes;
+            check(MFCreateMFByteStreamOnStream(memory.Get(), &bytes), "diagnostic byte stream");
+            auto type = video_type(true);
+            OwnedMediaSink sink;
+            check(MFCreateMPEG4MediaSink(bytes.Get(), type.Get(), nullptr, &sink.sink), "diagnostic MP4 sink");
+            ComPtr<IMFAttributes> settings;
+            check(MFCreateAttributes(&settings, 4), "diagnostic attributes");
+            if (test.gpu) check(settings->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, manager), "diagnostic GPU setting");
+            if (test.hardware) check(settings->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE), "diagnostic hardware setting");
+            if (test.converters_off) check(settings->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE), "diagnostic converter setting");
+            if (test.low_latency) check(settings->SetUINT32(MF_LOW_LATENCY, TRUE), "diagnostic latency setting");
+            ComPtr<IMFSinkWriter> candidate;
+            const HRESULT hr = MFCreateSinkWriterFromMediaSink(sink.sink.Get(),
+                test.gpu || test.hardware ? settings.Get() : nullptr, &candidate);
+            std::cout << "Writer check [" << test.name << "]: 0x" << std::hex
+                      << static_cast<unsigned long>(hr) << std::dec << "\n";
+        } catch (const Failure& failure) {
+            std::cout << "Writer check [" << test.name << "] setup failed at " << failure.stage
+                      << ": 0x" << std::hex << static_cast<unsigned long>(failure.hr) << std::dec << "\n";
+        }
+    }
+}
+
 int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     Runtime runtime; runtime.start();
     Capture capture; capture.start(adapter, output);
@@ -217,11 +257,9 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     check(MFCreateDXGIDeviceManager(&token, &manager), "create device manager");
     check(manager->ResetDevice(capture.device.Get(), token), "attach capture device manager");
     ComPtr<IMFAttributes> attributes;
-    check(MFCreateAttributes(&attributes, 5), "create writer settings");
+    check(MFCreateAttributes(&attributes, 2), "create writer settings");
     check(attributes->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, manager.Get()), "set writer GPU manager");
     check(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE), "enable hardware encoder selection");
-    check(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE), "disable software format conversion");
-    check(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "request low latency");
     ComPtr<IMFByteStream> file;
     // Archive media sinks need a readable, writable, seekable byte stream.
     // Write-only creation can make the MP4 sink reject setup with E_INVALIDARG.
@@ -243,8 +281,12 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     DWORD stream = 0;
     check(video_stream->GetIdentifier(&stream), "get MP4 video stream identifier");
     ComPtr<IMFSinkWriter> writer;
-    check(MFCreateSinkWriterFromMediaSink(media_sink.sink.Get(), attributes.Get(), &writer),
-          "create writer from explicit MP4 sink");
+    const HRESULT writer_result = MFCreateSinkWriterFromMediaSink(media_sink.sink.Get(), attributes.Get(), &writer);
+    if (FAILED(writer_result)) {
+        std::cout << "Minimal writer setup failed; running isolated settings checks (no recording).\n";
+        diagnose_writer_settings(manager.Get());
+        check(writer_result, "create writer with GPU manager + hardware flag only");
+    }
     std::cout << "Writer created from explicit MP4 sink.\n";
     check(writer->SetInputMediaType(stream, raw.Get(), nullptr), "configure NV12 encoder input");
     verify_hardware(writer.Get(), stream);
@@ -310,7 +352,7 @@ UINT number(const wchar_t* value, UINT minimum, UINT maximum) {
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
-    std::cout << "Clipping recorder: explicit-mp4-v2\n";
+    std::cout << "Clipping recorder: writer-settings-v3\n";
     if (argc > 5 || (argc > 1 && (std::wstring(argv[1]) == L"--help" || std::wstring(argv[1]) == L"-h"))) {
         std::cout << "Usage: clipping_record_test [new-file.mp4] [seconds 1-60] [adapter 0-31] [output 0-31]\n"
                      "Defaults: clip-test.mp4, 10 seconds, adapter 0, output 0.\n"
