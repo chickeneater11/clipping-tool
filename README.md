@@ -5,16 +5,18 @@ frame-time impact. Native C++20; no runtime dependencies in the current core.
 
 ## Current state
 
-This is the first foundation, **not a working screen recorder yet**:
+This is an early prototype. **The new recording path still needs Windows build and playback validation.**
 
 - Encoded-video replay buffer with payload allocation, packet-count, and time limits.
 - Whole-GOP eviction so retained video begins at an independent keyframe.
 - Synthetic buffer probe and correctness/stress tests.
+- Short Windows display-to-MP4 recording test with hardware-encoder verification.
 - Windows hardware capability probe (adapter inventory, encoder negotiation, GPU sample submission).
 - CMake build and GitHub Actions configuration for Windows, macOS, and Linux.
 
-Capture, hardware encoding, audio, hotkeys, and MP4 export are not implemented.
-The probe does not capture your screen, create playable clips, or measure game FPS.
+The new `clipping_record_test` implements display capture and hardware-encoded MP4
+recording. Audio, replay-buffer integration, and hotkeys are not implemented.
+The separate probes do not capture your screen or measure game FPS.
 
 ## Build and test
 
@@ -50,6 +52,19 @@ Exit codes: `0` = at least one combination accepted a GPU sample;
 `2` = no combination verified; `1` = probe initialization or fatal error.
 Acceptance is not proof of playable output or real-time performance.
 
+## First real recording test
+
+After transferring these changes and rebuilding on Windows:
+
+```text
+build\Release\clipping_record_test.exe clip-test.mp4 10
+```
+
+This captures the **entire selected display** for ten seconds, video only, at
+1080p60 / 12 Mbps. Use a new filename each time. Open the resulting MP4 and check
+motion, duration, and colors. See [recording instructions and limitations](docs/recording-test.md).
+The recorder and its Windows CLI smoke tests have not been run in this session.
+
 ## Memory contract
 
 Defaults: 30-second maximum timestamp span, 64 MiB encoded payload capacity,
@@ -78,6 +93,6 @@ the Apple developer tools/SDK are missing. The installed Homebrew GCC also fails
 because system SDK headers are absent. CI is configured but has not been run or
 pushed by this setup. No FPS or total-memory performance claims have been validated.
 
-The Windows capability probe is newly added and has not been compiled or run on
-Windows in this development session. Existing buffer tests were run by the user;
-their detailed results were not captured here.
+The user built and ran the capability probe on an RTX 2060: all three presets
+accepted GPU-backed input. Existing buffer tests were run by the user; their
+detailed results were not captured here. The new MP4 recorder remains unverified.

@@ -7,7 +7,12 @@ Keep recording independent from any future settings UI. No live preview is neede
 for the first recorder. Prefer bounded work and explicit failures over silent
 software encoding or ever-growing queues.
 
-## Intended recording path (not implemented yet)
+## Intended product recording path
+
+The first MP4 test uses Desktop Duplication and the Media Foundation sink writer
+as a smaller integration step. Its code lives in `src/windows/record_test.cpp`.
+The replay product path below is still planned; it will need direct access to
+encoded packets rather than the sink writer owning the encoder.
 
 1. Windows.Graphics.Capture acquires a selected window/display into D3D11 surfaces.
 2. GPU color conversion/scaling prepares a supported encoder input format.
@@ -28,9 +33,10 @@ encoded discontinuities. Do not elevate recording to real-time process priority.
 ## Delivery sequence
 
 - [x] Portable replay buffer, synthetic probe, tests, build configuration.
-- [x] Windows capability probe implementation (Windows validation pending): adapters, hardware H.264 encoders, supported input
+- [x] Windows capability probe (GPU sample acceptance verified by the user on RTX 2060): adapters, hardware H.264 encoders, supported input
       formats, D3D11 acceptance, actionable failure output.
-- [ ] Capture one selected display/window and encode a short video-only recording.
+- [x] Implement a selected-display video-only MP4 recording test using Desktop Duplication and the sink writer.
+- [ ] Build/run the recorder on Windows and verify playable output.
 - [ ] Verify decoded output and timestamps on NVIDIA, AMD, and Intel machines.
 - [ ] Integrate replay buffer and bounded hotkey export. Bound concurrent exports
       and account for retained export payloads in the global memory budget.
