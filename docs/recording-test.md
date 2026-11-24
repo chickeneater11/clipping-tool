@@ -130,3 +130,13 @@ and each optional setting added to the required pair. Each check uses its own
 stream and sink; no encoding or recording is performed by these diagnostics.
 No diagnostic-only configuration is used as a recording fallback. This revision
 still requires building and running on the Windows test PC.
+
+## Stream index correction
+
+On the test PC, v3 creates both the MP4 sink and sink writer successfully with
+minimal attributes. Input configuration then returned MF_E_INVALIDSTREAMNUMBER.
+`stream-index-v4` keeps the underlying sink track identifier separate from the
+zero-based writer index (0 for our single video stream). That same writer index
+is used for input negotiation, transform inspection, and sample submission.
+The printed mapping makes the distinction visible. Windows execution of this
+correction remains pending.

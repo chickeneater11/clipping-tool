@@ -278,8 +278,12 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     // This sink has a fixed video stream; do not call AddStream on the writer.
     ComPtr<IMFStreamSink> video_stream;
     check(media_sink.sink->GetStreamSinkByIndex(0, &video_stream), "get MP4 video stream");
-    DWORD stream = 0;
-    check(video_stream->GetIdentifier(&stream), "get MP4 video stream identifier");
+    DWORD sink_stream_id = 0;
+    check(video_stream->GetIdentifier(&sink_stream_id), "get MP4 video stream identifier");
+    // Sink-writer APIs take a zero-based index, NOT the sink's track identifier.
+    constexpr DWORD stream = 0;
+    std::cout << "Video mapping: sink identifier=" << sink_stream_id
+              << ", writer index=" << stream << "\n";
     ComPtr<IMFSinkWriter> writer;
     const HRESULT writer_result = MFCreateSinkWriterFromMediaSink(media_sink.sink.Get(), attributes.Get(), &writer);
     if (FAILED(writer_result)) {
@@ -352,7 +356,7 @@ UINT number(const wchar_t* value, UINT minimum, UINT maximum) {
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
-    std::cout << "Clipping recorder: writer-settings-v3\n";
+    std::cout << "Clipping recorder: stream-index-v4\n";
     if (argc > 5 || (argc > 1 && (std::wstring(argv[1]) == L"--help" || std::wstring(argv[1]) == L"-h"))) {
         std::cout << "Usage: clipping_record_test [new-file.mp4] [seconds 1-60] [adapter 0-31] [output 0-31]\n"
                      "Defaults: clip-test.mp4, 10 seconds, adapter 0, output 0.\n"
