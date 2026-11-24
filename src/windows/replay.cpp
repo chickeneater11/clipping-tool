@@ -1,5 +1,5 @@
 #include "capture_support.hpp"
-#include "clipping/replay_buffer.hpp"
+#include "clipping/shared_replay_buffer.hpp"
 #include "clipping/h264.hpp"
 #include <strmif.h>
 #include <codecapi.h>
@@ -7,6 +7,8 @@
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <future>
+#include <sstream>
 
 using namespace clipping::windows;
 namespace {
@@ -126,7 +128,7 @@ struct Encoder {
         }
         throw Failure{"no hardware encoder accepted the replay configuration", E_FAIL};
     }
-    void receive(clipping::ReplayBuffer& replay, unsigned renegotiations = 0) {
+    void receive(clipping::SharedReplayBuffer& replay, unsigned renegotiations = 0) {
         MFT_OUTPUT_STREAM_INFO info{};
         check(transform->GetOutputStreamInfo(output_id, &info), "encoder output allocation requirements");
         ComPtr<IMFSample> provided;
@@ -186,7 +188,7 @@ struct Encoder {
         if (accepted != clipping::PushResult::stored) ++rejected;
         ++outputs;
     }
-    void pump(clipping::ReplayBuffer& replay) {
+    void pump(clipping::SharedReplayBuffer& replay) {
         // Bound one pump pass so messages/capture cannot starve.
         for (unsigned i = 0; i < 64; ++i) {
             ComPtr<IMFMediaEvent> event;
@@ -214,14 +216,30 @@ struct Encoder {
     }
 };
 
-void save_replay(const std::filesystem::path& folder, Encoder& encoder, const clipping::ReplayBuffer& replay) {
-    if (replay.packets().empty()) { std::cout << "Buffer is waiting for an IDR; no clip saved yet.\n"; return; }
-    auto started = Clock::now();
+struct SaveResult {
+    std::filesystem::path path;
+    double seconds = 0, elapsed = 0;
+    std::string error;
+};
+std::vector<BYTE> export_format(Encoder& encoder) {
     ComPtr<IMFMediaType> type;
     check(encoder.transform->GetOutputCurrentType(encoder.output_id, &type), "read H.264 export format");
+    UINT32 size = 0;
+    check(MFGetAttributesAsBlobSize(type.Get(), &size), "measure export format");
+    if (!size || size > 1024 * 1024) throw Failure{"export format exceeds 1 MiB limit", E_OUTOFMEMORY};
+    std::vector<BYTE> bytes(size);
+    check(MFGetAttributesAsBlob(type.Get(), bytes.data(), size), "serialize export format");
+    return bytes; // only plain data crosses into the worker, never encoder COM pointers
+}
+SaveResult save_replay(const std::filesystem::path& folder, const std::vector<BYTE>& format,
+                       const clipping::ReplaySnapshot& replay) {
+    const auto started = Clock::now();
+    ComPtr<IMFMediaType> type;
+    check(MFCreateMediaType(&type), "create export-thread media type");
+    check(MFInitAttributesFromBlob(type.Get(), format.data(), static_cast<UINT32>(format.size())), "restore export format");
     UINT32 header_size = 0;
     const auto& packets = replay.packets();
-    const auto first = clipping::inspect_h264(packets.front().data);
+    const auto first = clipping::inspect_h264(packets.front()->data);
     if (FAILED(type->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER, &header_size)) || !header_size) {
         if (!first.sps || !first.pps)
             throw Failure{"cannot export without codec headers or SPS/PPS in the first IDR", MF_E_INVALIDMEDIATYPE};
@@ -245,9 +263,9 @@ void save_replay(const std::filesystem::path& folder, Encoder& encoder, const cl
     // Both types are identical compressed H.264: passthrough, not re-encoding.
     check(writer->SetInputMediaType(0, type.Get(), nullptr), "set compressed H.264 passthrough");
     check(writer->BeginWriting(), "begin replay MP4");
-    const auto origin = packets.front().pts_us;
+    const auto origin = packets.front()->pts_us;
     for (std::size_t i = 0; i < packets.size(); ++i) {
-        const auto& packet = packets[i];
+        const auto& packet = *packets[i];
         ComPtr<IMFSample> sample;
         check(MFCreateSample(&sample), "allocate mux sample");
         ComPtr<IMFMediaBuffer> data;
@@ -259,16 +277,53 @@ void save_replay(const std::filesystem::path& folder, Encoder& encoder, const cl
         check(data->SetCurrentLength(static_cast<DWORD>(packet.data.size())), "set mux packet size");
         check(sample->AddBuffer(data.Get()), "attach mux packet");
         check(sample->SetSampleTime(static_cast<LONGLONG>((packet.pts_us - origin) * 10)), "rebase clip timestamp");
-        const auto duration = i + 1 < packets.size() ? (packets[i + 1].pts_us - packet.pts_us) * 10 : 10'000'000 / fps;
+        const auto duration = i + 1 < packets.size() ? (packets[i + 1]->pts_us - packet.pts_us) * 10 : 10'000'000 / fps;
         check(sample->SetSampleDuration(static_cast<LONGLONG>(duration)), "set clip packet duration");
         check(sample->SetUINT32(MFSampleExtension_CleanPoint, packet.keyframe), "set IDR marker");
         check(writer->WriteSample(0, sample.Get()), "mux replay packet");
     }
     check(writer->Finalize(), "finalize replay MP4");
-    std::wcout << L"Saved " << path.wstring() << L"\n";
-    std::cout << "Clip seconds: " << static_cast<double>(packets.back().pts_us - origin) / 1'000'000 + 1.0 / fps
-              << "; capture pause for save (s): " << std::chrono::duration<double>(Clock::now() - started).count() << '\n';
+    return {path, static_cast<double>(packets.back()->pts_us - origin) / 1'000'000 + 1.0 / fps,
+            std::chrono::duration<double>(Clock::now() - started).count(), {}};
 }
+
+// One worker/job; no unbounded job queue. Future is joined before main-thread
+// runtime shutdown, including on exceptions. All COM work is worker-local.
+class ExportWorker {
+public:
+    bool busy() const { return future_.valid(); }
+    void submit(std::filesystem::path folder, std::vector<BYTE> format,
+                std::unique_ptr<clipping::ReplaySnapshot> snapshot) {
+        if (busy()) throw std::logic_error("export already active");
+        future_ = std::async(std::launch::async,
+            [folder = std::move(folder), format = std::move(format), snapshot = std::move(snapshot)]() mutable {
+                SaveResult result;
+                try {
+                    Runtime runtime; runtime.start();
+                    result = save_replay(folder, format, *snapshot);
+                } catch (const Failure& failure) {
+                    std::ostringstream message;
+                    message << failure.stage << " (HRESULT 0x" << std::hex
+                            << static_cast<unsigned long>(failure.hr) << "). Partial file may remain.";
+                    result.error = message.str();
+                } catch (const std::exception& error) { result.error = error.what(); }
+                snapshot.reset(); // return pinned payload even before the result is polled
+                return result;
+            });
+    }
+    void poll(bool wait = false) {
+        if (!busy() || (!wait && future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return;
+        const auto result = future_.get();
+        if (!result.error.empty()) std::cerr << "Background save failed: " << result.error << '\n';
+        else {
+            std::wcout << L"Saved " << result.path.wstring() << L"\n";
+            std::cout << "Clip seconds: " << result.seconds << "; background export time (s): "
+                      << result.elapsed << " (capture continued)\n";
+        }
+    }
+private:
+    std::future<SaveResult> future_;
+};
 
 int run(const std::filesystem::path& folder) {
     std::filesystem::create_directories(folder);
@@ -289,19 +344,21 @@ int run(const std::filesystem::path& folder) {
     auto input = video_type(false);
     check(pool->InitializeSampleAllocatorEx(2, 6, pool_settings.Get(), input.Get()), "allocate six-sample GPU pool");
     Encoder encoder; encoder.start(manager.Get());
-    clipping::ReplayBuffer replay({payload_budget, 3600, 30'000'000});
+    clipping::SharedReplayBuffer replay({payload_budget, 3600, 30'000'000});
+    ExportWorker exporter;
     const auto initial_deadline = Clock::now() + std::chrono::seconds(5);
     while (!capture.have_frame && Clock::now() < initial_deadline && !stopping.load()) capture.update(100);
     if (!capture.have_frame) throw Failure{"no initial desktop image", HRESULT_FROM_WIN32(WAIT_TIMEOUT)};
     std::cout << "Replay running: 1080p60, 12 Mbps, up to 30 seconds / 64 MiB encoded payload.\n"
                  "F8 saves recent video. Ctrl+C stops. Video only, entire display 0 on adapter 0.\n"
-                 "Saving pauses capture; repeated F8 presses during a save are discarded.\n";
+                 "Saving runs in the background; F8 is ignored while a save is active.\n";
     const auto start = Clock::now();
     auto next_report = start + std::chrono::seconds(5);
     auto last_output = start;
     std::uint64_t last_count = 0, submitted = 0, missed = 0, busy = 0;
     long long slot = 0;
     while (!stopping.load()) {
+        exporter.poll();
         encoder.pump(replay);
         if (encoder.outputs != last_count) { last_count = encoder.outputs; last_output = Clock::now(); }
         if (Clock::now() - last_output > std::chrono::seconds(5))
@@ -312,19 +369,32 @@ int run(const std::filesystem::path& folder) {
             if (message.message == WM_HOTKEY && message.wParam == 1) save = true;
         }
         if (save) {
-            try { save_replay(folder, encoder, replay); }
-            catch (const Failure& failure) {
-                std::cerr << "Save failed at " << failure.stage << ": 0x" << std::hex
-                          << static_cast<unsigned long>(failure.hr) << std::dec << ". Partial file may remain.\n";
+            if (exporter.busy()) std::cout << "Save already active; F8 ignored.\n";
+            else {
+                const auto snapshot_started = Clock::now();
+                try {
+                    // At most 48 MiB can be pinned, leaving 16 MiB for new frames.
+                    auto snapshot = replay.snapshot(48 * 1024 * 1024);
+                    if (!snapshot) std::cout << "No decodable clip fits the export budget yet.\n";
+                    else {
+                        auto format = export_format(encoder);
+                        exporter.submit(folder, std::move(format), std::move(snapshot));
+                        std::cout << "Background save started; snapshot/dispatch (ms): "
+                                  << std::chrono::duration<double, std::milli>(Clock::now() - snapshot_started).count() << '\n';
+                    }
+                } catch (const Failure& failure) {
+                    std::cerr << "Save dispatch failed at " << failure.stage << ": 0x" << std::hex
+                              << static_cast<unsigned long>(failure.hr) << std::dec << '\n';
+                } catch (const std::exception& error) { std::cerr << "Save dispatch failed: " << error.what() << '\n'; }
             }
-            while (PeekMessageW(&message, nullptr, WM_HOTKEY, WM_HOTKEY, PM_REMOVE)) {}
-            last_output = Clock::now(); // time spent in synchronous export isn't an encoder stall
         }
         const auto now = Clock::now();
         if (now >= next_report) {
-            const auto retained = replay.packets().empty() ? 0.0 : static_cast<double>(replay.packets().back().pts_us - replay.packets().front().pts_us) / 1'000'000;
+            const auto retained = replay.packets().empty() ? 0.0 : static_cast<double>(replay.packets().back()->pts_us - replay.packets().front()->pts_us) / 1'000'000;
             std::cout << "Buffered " << retained << " s, " << replay.payload_bytes() / (1024.0 * 1024.0)
-                      << " MiB; input=" << submitted << ", output=" << encoder.outputs
+                      << " MiB live, " << replay.shared_payload_bytes() / (1024.0 * 1024.0)
+                      << " MiB shared; export=" << (exporter.busy() ? "active" : "idle")
+                      << ", pressure drops=" << replay.pressure_drops() << "; input=" << submitted << ", output=" << encoder.outputs
                       << ", skipped slots=" << missed << ", busy slots=" << busy
                       << ", waiting-IDR/rejected=" << encoder.rejected << '\n';
             next_report = now + std::chrono::seconds(5);
@@ -348,12 +418,14 @@ int run(const std::filesystem::path& folder) {
     check(encoder.transform->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain replay encoder");
     const auto deadline = Clock::now() + std::chrono::seconds(3);
     while (!encoder.drained && Clock::now() < deadline) { encoder.pump(replay); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    if (exporter.busy()) std::cout << "Waiting for the active save before exit...\n";
+    exporter.poll(true);
     std::cout << "Stopped. Drain completed: " << (encoder.drained ? "yes" : "timeout; encoder will be flushed") << '\n';
     return 0;
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
-    std::cout << "Clipping replay: baseline-compat-v2\n";
+    std::cout << "Clipping replay: background-export-v3\n";
     if (argc > 2 || (argc == 2 && std::wstring(argv[1]) == L"--help")) {
         std::cout << "Usage: clipping_replay [output-folder]\nDefault: clips. F8 saves, Ctrl+C stops.\n";
         return argc > 2 ? 1 : 0;

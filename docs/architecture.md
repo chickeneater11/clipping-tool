@@ -39,7 +39,9 @@ encoded discontinuities. Do not elevate recording to real-time process priority.
 - [x] User verified playable recording on Windows / RTX 2060.
 - [ ] Verify decoded output and timestamps on NVIDIA, AMD, and Intel machines.
 - [x] Implement direct hardware encoding, capped replay retention, and synchronous F8 export.
-- [ ] Verify the replay path on Windows, then budget an export worker for uninterrupted capture.
+- [x] User verified playable 30-second replay on RTX 2060.
+- [x] Implement a single background export worker and shared 64 MiB retained-payload budget.
+- [ ] Validate background saving, memory pressure, and shutdown on Windows.
 - [ ] Add WASAPI game/microphone audio, common clock synchronization, device changes.
 - [ ] Benchmark frame times and memory before adding a tray/settings interface.
 

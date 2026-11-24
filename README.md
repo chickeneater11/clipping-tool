@@ -5,7 +5,7 @@ frame-time impact. Native C++20; no runtime dependencies in the current core.
 
 ## Current state
 
-This is an early prototype. **The new replay path still needs Windows build and playback validation.**
+This is an early prototype. **Background export still needs Windows build and playback validation.**
 
 - Encoded-video replay buffer with payload allocation, packet-count, and time limits.
 - Whole-GOP eviction so retained video begins at an independent keyframe.
@@ -16,7 +16,8 @@ This is an early prototype. **The new replay path still needs Windows build and 
 
 The new `clipping_record_test` implements display capture and hardware-encoded MP4
 recording. Audio is not implemented. Replay-buffer integration and F8 saving are implemented
-in a separate executable and await Windows validation.
+in a separate executable. The synchronous version was verified playable on Windows;
+the new background export worker awaits validation.
 The separate probes do not capture your screen or measure game FPS.
 
 ## Build and test
@@ -70,7 +71,9 @@ The recorder and its Windows CLI smoke tests have not been run in this session.
 
 A new `clipping_replay` executable connects a direct hardware encoder to the
 30-second / 64 MiB replay buffer. F8 saves an MP4 to `clips`; Ctrl+C stops it.
-**Windows validation is pending. Saving briefly pauses capture in this version.**
+**Saving now runs on a background worker; Windows validation of this revision is pending.**
+One active export shares immutable packets with recording under a 64 MiB payload
+cap. An export can pin at most 48 MiB; clips may shorten under memory pressure.
 Transfer the whole repo, including the new shared capture header, before rebuilding.
 See [replay setup and test steps](docs/replay-test.md).
 
@@ -86,16 +89,17 @@ Payload accounting uses vector capacity, so unused reserved storage is charged.
 Metadata, allocator overhead, incoming packets, encoder buffers, and GPU textures
 are **outside** this payload budget. This is not a total-process RAM guarantee.
 
-The producer must bound packet allocation before calling `push`. The core takes
-ownership of packets without copying their payload. It is single-threaded and
-must be owned by one recording worker. The read-only packet view is invalidated
-by mutations; do not use it concurrently or retain it for an asynchronous export.
+`SharedReplayBuffer` is owned by the capture thread and provides one immutable
+export snapshot. Shared payload accounting includes both owners without counting
+the same packet twice. A worker can release its snapshot concurrently; live ring
+mutation stays on the capture thread. The original `ReplayBuffer` and its tests
+remain available as the simple single-thread foundation.
 
 Only closed-GOP video with no B frames and strictly increasing microsecond PTS is
-supported. A keyframe must be an independently decodable IDR. Codec configuration
-must be retained separately by the future encoder/export integration. Audio will
-need its own timestamp-aligned policy. Dropping an oversized encoded frame clears
-the buffer and requires a new IDR. Stream discontinuities require `reset()`.
+supported. Clips start at an independently decodable IDR. Codec format metadata
+is serialized on the capture thread and recreated in the export worker. Audio
+will need its own timestamp-aligned policy. Oversized/missing encoded frames
+require waiting for a new IDR before further dependent frames are retained.
 
 See [architecture](docs/architecture.md) and [performance plan](docs/performance.md).
 
@@ -109,5 +113,5 @@ pushed by this setup. No FPS or total-memory performance claims have been valida
 The user built and ran the capability probe on an RTX 2060: all three presets
 accepted GPU-backed input. Existing buffer tests were run by the user; their
 detailed results were not captured here. The user verified a playable MP4 recording: 600 submitted frames, no missed slots
-or pool drops in a ten-second RTX 2060 run. The new direct-encoder replay path
-is not yet verified on Windows.
+or pool drops in a ten-second RTX 2060 run. The user also verified a playable 30-second replay with synchronous F8 saving.
+The new background worker/shared-memory policy is not yet verified on Windows.
