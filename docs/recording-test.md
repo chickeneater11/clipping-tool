@@ -102,3 +102,14 @@ Let the short test stop itself. Driver/writer calls have no hard timeout.
 - [Hardware MFT identity requirements](https://learn.microsoft.com/en-us/windows/win32/medfound/hardware-mfts)
 - [Inspect sink writer transforms](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsinkwriterex-gettransformforstream)
 - [GPU sample allocator](https://learn.microsoft.com/en-us/windows/win32/api/mfapi/nf-mfapi-mfcreatevideosampleallocatorex)
+
+## MP4 initialization diagnostic revision
+
+The `explicit-mp4-v2` banner identifies the revision that creates an H.264 MP4
+media sink explicitly, then wraps it with a sink writer. This replaces the
+automatic container-construction call that returned E_INVALIDARG on the test PC.
+The earlier read/write access change alone did not resolve that failure. This
+revision is an unverified fix attempt, not an established root-cause diagnosis.
+Output capabilities, sink creation, and writer creation are reported separately.
+The existing fixed video stream is used without AddStream, and the owned media
+sink is shut down after the writer releases, including on exceptions.

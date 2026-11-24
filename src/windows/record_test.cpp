@@ -32,6 +32,11 @@ struct Runtime {
     }
     ~Runtime() { if (mf) MFShutdown(); if (com) CoUninitialize(); }
 };
+// Declare before the writer so the writer releases first on every exit path.
+struct OwnedMediaSink {
+    ComPtr<IMFMediaSink> sink;
+    ~OwnedMediaSink() { if (sink) sink->Shutdown(); }
+};
 struct FrameRelease {
     IDXGIOutputDuplication* duplication;
     ~FrameRelease() { duplication->ReleaseFrame(); }
@@ -217,7 +222,6 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     check(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE), "enable hardware encoder selection");
     check(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE), "disable software format conversion");
     check(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "request low latency");
-    check(attributes->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4), "set MP4 container");
     ComPtr<IMFByteStream> file;
     // Archive media sinks need a readable, writable, seekable byte stream.
     // Write-only creation can make the MP4 sink reject setup with E_INVALIDARG.
@@ -227,11 +231,21 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     constexpr DWORD required = MFBYTESTREAM_IS_READABLE | MFBYTESTREAM_IS_WRITABLE | MFBYTESTREAM_IS_SEEKABLE;
     if ((capabilities & required) != required)
         throw Failure{"MP4 output must be readable, writable, and seekable", E_INVALIDARG};
-    ComPtr<IMFSinkWriter> writer;
-    check(MFCreateSinkWriterFromURL(nullptr, file.Get(), attributes.Get(), &writer), "create MP4 writer");
-    DWORD stream = 0;
+    std::cout << "Output stream capabilities: 0x" << std::hex << capabilities << std::dec << "\n";
     auto encoded = video_type(true), raw = video_type(false);
-    check(writer->AddStream(encoded.Get(), &stream), "add H.264 MP4 stream");
+    OwnedMediaSink media_sink;
+    check(MFCreateMPEG4MediaSink(file.Get(), encoded.Get(), nullptr, &media_sink.sink),
+          "create explicit H.264 MP4 media sink");
+    std::cout << "Explicit MP4 media sink created.\n";
+    // This sink has a fixed video stream; do not call AddStream on the writer.
+    ComPtr<IMFStreamSink> video_stream;
+    check(media_sink.sink->GetStreamSinkByIndex(0, &video_stream), "get MP4 video stream");
+    DWORD stream = 0;
+    check(video_stream->GetIdentifier(&stream), "get MP4 video stream identifier");
+    ComPtr<IMFSinkWriter> writer;
+    check(MFCreateSinkWriterFromMediaSink(media_sink.sink.Get(), attributes.Get(), &writer),
+          "create writer from explicit MP4 sink");
+    std::cout << "Writer created from explicit MP4 sink.\n";
     check(writer->SetInputMediaType(stream, raw.Get(), nullptr), "configure NV12 encoder input");
     verify_hardware(writer.Get(), stream);
     ComPtr<IMFVideoSampleAllocatorEx> pool;
@@ -296,6 +310,7 @@ UINT number(const wchar_t* value, UINT minimum, UINT maximum) {
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
+    std::cout << "Clipping recorder: explicit-mp4-v2\n";
     if (argc > 5 || (argc > 1 && (std::wstring(argv[1]) == L"--help" || std::wstring(argv[1]) == L"-h"))) {
         std::cout << "Usage: clipping_record_test [new-file.mp4] [seconds 1-60] [adapter 0-31] [output 0-31]\n"
                      "Defaults: clip-test.mp4, 10 seconds, adapter 0, output 0.\n"
