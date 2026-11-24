@@ -1,0 +1,7 @@
+/build*/
+/out/
+/.vs/
+*.mp4
+*.mkv
+*.etl
+.DS_Store
