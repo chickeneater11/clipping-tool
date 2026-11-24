@@ -5,3 +5,5 @@
 *.mkv
 *.etl
 .DS_Store
+
+/capabilities.txt

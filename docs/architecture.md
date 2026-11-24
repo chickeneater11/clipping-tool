@@ -28,7 +28,7 @@ encoded discontinuities. Do not elevate recording to real-time process priority.
 ## Delivery sequence
 
 - [x] Portable replay buffer, synthetic probe, tests, build configuration.
-- [ ] Windows capability probe: adapters, hardware H.264 encoders, supported input
+- [x] Windows capability probe implementation (Windows validation pending): adapters, hardware H.264 encoders, supported input
       formats, D3D11 acceptance, actionable failure output.
 - [ ] Capture one selected display/window and encode a short video-only recording.
 - [ ] Verify decoded output and timestamps on NVIDIA, AMD, and Intel machines.

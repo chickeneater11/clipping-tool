@@ -10,6 +10,7 @@ This is the first foundation, **not a working screen recorder yet**:
 - Encoded-video replay buffer with payload allocation, packet-count, and time limits.
 - Whole-GOP eviction so retained video begins at an independent keyframe.
 - Synthetic buffer probe and correctness/stress tests.
+- Windows hardware capability probe (adapter inventory, encoder negotiation, GPU sample submission).
 - CMake build and GitHub Actions configuration for Windows, macOS, and Linux.
 
 Capture, hardware encoding, audio, hotkeys, and MP4 export are not implemented.
@@ -29,6 +30,25 @@ ctest --test-dir build -C Release --output-on-failure
 
 Run `build/Release/clipping_probe.exe` on Windows with the Visual Studio generator,
 or `./build/clipping_probe` with a single-configuration generator.
+
+## Windows capability probe
+
+After building on Windows, run from the repository root in PowerShell:
+
+```powershell
+.\build\Release\clipping_capabilities.exe | Tee-Object -FilePath capabilities.txt
+$LASTEXITCODE
+```
+
+The Visual Studio generator places the executable in `build/Release`; a
+single-configuration generator typically places it directly in `build`.
+The report tests hardware H.264 encoders with synthetic GPU-backed NV12 input
+at 720p30 / 6 Mbps, 1080p60 / 12 Mbps, and 1440p60 / 20 Mbps. It does not
+capture your screen or audio. See [probe details](docs/capability-probe.md).
+
+Exit codes: `0` = at least one combination accepted a GPU sample;
+`2` = no combination verified; `1` = probe initialization or fatal error.
+Acceptance is not proof of playable output or real-time performance.
 
 ## Memory contract
 
@@ -57,3 +77,7 @@ Tests are written but have not been executed successfully on the development Mac
 the Apple developer tools/SDK are missing. The installed Homebrew GCC also fails
 because system SDK headers are absent. CI is configured but has not been run or
 pushed by this setup. No FPS or total-memory performance claims have been validated.
+
+The Windows capability probe is newly added and has not been compiled or run on
+Windows in this development session. Existing buffer tests were run by the user;
+their detailed results were not captured here.
