@@ -14,7 +14,7 @@ ctest --test-dir build -C Release --output-on-failure
 build\Release\clipping_replay.exe
 ```
 
-The banner is `Clipping replay: direct-h264-v1`. This captures the entire first
+The banner is `Clipping replay: baseline-compat-v2`. This captures the entire first
 output on adapter 0, at 1080p60, 12 Mbps, without audio. Capture retains up to
 30 seconds in memory. Every five seconds it prints buffered duration, encoded
 payload memory, submitted/output frames, skipped/busy slots, and packets rejected
@@ -94,3 +94,13 @@ IDR vs non-IDR, SPS/PPS, truncated input, forbidden bits, and escaped payloads.
 These passed GCC C++20 syntax/constant-evaluation checks on the development Mac.
 Linking/running normal C++ tests remains blocked by its missing Apple SDK headers.
 The new Windows targets have not been compiled or run in this development session.
+
+## Baseline compatibility correction
+
+The RTX 2060 accepted output/input negotiation and GOP configuration but rejected
+setting CODECAPI_AVEncMPVDefaultBPictureCount to zero with E_INVALIDARG. This
+property is now optional only because the program verifies that the negotiated
+output profile remains Baseline (66), which excludes B pictures. It performs the
+same verification after initial format renegotiation, and still rejects
+non-increasing packet timestamps. It does not fall back to Main/High profiles or
+a software encoder. Windows validation of this correction is pending.

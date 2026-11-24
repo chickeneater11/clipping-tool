@@ -61,6 +61,14 @@ struct Encoder {
         if (activation) activation->ShutdownObject();
         activation.Reset(); credits = 0;
     }
+    void verify_baseline() {
+        ComPtr<IMFMediaType> negotiated;
+        check(transform->GetOutputCurrentType(output_id, &negotiated), "read negotiated encoder profile");
+        UINT32 profile = 0;
+        check(negotiated->GetUINT32(MF_MT_MPEG2_PROFILE, &profile), "verify negotiated Baseline profile");
+        if (profile != 66)
+            throw Failure{"encoder did not retain the required Baseline profile", MF_E_INVALIDMEDIATYPE};
+    }
     void start(IMFDXGIDeviceManager* manager) {
         Activations found;
         MFT_REGISTER_TYPE_INFO filter{MFMediaType_Video, MFVideoFormat_H264};
@@ -96,7 +104,15 @@ struct Encoder {
                 value.ulVal = fps;
                 check(codec->SetValue(&CODECAPI_AVEncMPVGOPSize, &value), "set one-second GOP");
                 value.ulVal = 0;
-                check(codec->SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &value), "disable B pictures");
+                const HRESULT b_frames = codec->SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &value);
+                // Some hardware MFTs reject this optional property even though
+                // their accepted Baseline profile already excludes B pictures.
+                verify_baseline();
+                if (FAILED(b_frames)) {
+                    std::cout << "B-picture property unavailable (0x" << std::hex
+                              << static_cast<unsigned long>(b_frames) << std::dec
+                              << "); negotiated Baseline profile verified.\n";
+                }
                 check(transform.As(&events), "encoder event interface");
                 check(transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0), "begin encoder streaming");
                 check(transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0), "start encoder stream");
@@ -142,6 +158,7 @@ struct Encoder {
             if (subtype != MFVideoFormat_H264 || changed_width != width || changed_height != height)
                 throw Failure{"unexpected encoder format change", MF_E_INVALIDMEDIATYPE};
             check(transform->SetOutputType(output_id, updated.Get(), 0), "accept initial encoder format");
+            verify_baseline();
             receive(replay, 1);
             return;
         }
@@ -336,7 +353,7 @@ int run(const std::filesystem::path& folder) {
 }
 } // namespace
 int wmain(int argc, wchar_t** argv) {
-    std::cout << "Clipping replay: direct-h264-v1\n";
+    std::cout << "Clipping replay: baseline-compat-v2\n";
     if (argc > 2 || (argc == 2 && std::wstring(argv[1]) == L"--help")) {
         std::cout << "Usage: clipping_replay [output-folder]\nDefault: clips. F8 saves, Ctrl+C stops.\n";
         return argc > 2 ? 1 : 0;
