@@ -219,7 +219,14 @@ int record(const wchar_t* path, UINT seconds, UINT adapter, UINT output) {
     check(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "request low latency");
     check(attributes->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4), "set MP4 container");
     ComPtr<IMFByteStream> file;
-    check(MFCreateFile(MF_ACCESSMODE_WRITE, MF_OPENMODE_FAIL_IF_EXIST, MF_FILEFLAGS_NONE, path, &file), "create output file (choose a new filename if it exists)");
+    // Archive media sinks need a readable, writable, seekable byte stream.
+    // Write-only creation can make the MP4 sink reject setup with E_INVALIDARG.
+    check(MFCreateFile(MF_ACCESSMODE_READWRITE, MF_OPENMODE_FAIL_IF_EXIST, MF_FILEFLAGS_NONE, path, &file), "create output file (choose a new filename if it exists)");
+    DWORD capabilities = 0;
+    check(file->GetCapabilities(&capabilities), "query output stream capabilities");
+    constexpr DWORD required = MFBYTESTREAM_IS_READABLE | MFBYTESTREAM_IS_WRITABLE | MFBYTESTREAM_IS_SEEKABLE;
+    if ((capabilities & required) != required)
+        throw Failure{"MP4 output must be readable, writable, and seekable", E_INVALIDARG};
     ComPtr<IMFSinkWriter> writer;
     check(MFCreateSinkWriterFromURL(nullptr, file.Get(), attributes.Get(), &writer), "create MP4 writer");
     DWORD stream = 0;
