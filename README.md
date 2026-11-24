@@ -5,7 +5,7 @@ frame-time impact. Native C++20; no runtime dependencies in the current core.
 
 ## Current state
 
-This is an early prototype. **The new recording path still needs Windows build and playback validation.**
+This is an early prototype. **The new replay path still needs Windows build and playback validation.**
 
 - Encoded-video replay buffer with payload allocation, packet-count, and time limits.
 - Whole-GOP eviction so retained video begins at an independent keyframe.
@@ -15,7 +15,8 @@ This is an early prototype. **The new recording path still needs Windows build a
 - CMake build and GitHub Actions configuration for Windows, macOS, and Linux.
 
 The new `clipping_record_test` implements display capture and hardware-encoded MP4
-recording. Audio, replay-buffer integration, and hotkeys are not implemented.
+recording. Audio is not implemented. Replay-buffer integration and F8 saving are implemented
+in a separate executable and await Windows validation.
 The separate probes do not capture your screen or measure game FPS.
 
 ## Build and test
@@ -65,6 +66,18 @@ This captures the **entire selected display** for ten seconds, video only, at
 motion, duration, and colors. See [recording instructions and limitations](docs/recording-test.md).
 The recorder and its Windows CLI smoke tests have not been run in this session.
 
+## Replay hotkey prototype
+
+A new `clipping_replay` executable connects a direct hardware encoder to the
+30-second / 64 MiB replay buffer. F8 saves an MP4 to `clips`; Ctrl+C stops it.
+**Windows validation is pending. Saving briefly pauses capture in this version.**
+Transfer the whole repo, including the new shared capture header, before rebuilding.
+See [replay setup and test steps](docs/replay-test.md).
+
+```text
+build\Release\clipping_replay.exe
+```
+
 ## Memory contract
 
 Defaults: 30-second maximum timestamp span, 64 MiB encoded payload capacity,
@@ -95,4 +108,6 @@ pushed by this setup. No FPS or total-memory performance claims have been valida
 
 The user built and ran the capability probe on an RTX 2060: all three presets
 accepted GPU-backed input. Existing buffer tests were run by the user; their
-detailed results were not captured here. The new MP4 recorder remains unverified.
+detailed results were not captured here. The user verified a playable MP4 recording: 600 submitted frames, no missed slots
+or pool drops in a ten-second RTX 2060 run. The new direct-encoder replay path
+is not yet verified on Windows.

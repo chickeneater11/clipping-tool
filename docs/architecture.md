@@ -36,10 +36,10 @@ encoded discontinuities. Do not elevate recording to real-time process priority.
 - [x] Windows capability probe (GPU sample acceptance verified by the user on RTX 2060): adapters, hardware H.264 encoders, supported input
       formats, D3D11 acceptance, actionable failure output.
 - [x] Implement a selected-display video-only MP4 recording test using Desktop Duplication and the sink writer.
-- [ ] Build/run the recorder on Windows and verify playable output.
+- [x] User verified playable recording on Windows / RTX 2060.
 - [ ] Verify decoded output and timestamps on NVIDIA, AMD, and Intel machines.
-- [ ] Integrate replay buffer and bounded hotkey export. Bound concurrent exports
-      and account for retained export payloads in the global memory budget.
+- [x] Implement direct hardware encoding, capped replay retention, and synchronous F8 export.
+- [ ] Verify the replay path on Windows, then budget an export worker for uninterrupted capture.
 - [ ] Add WASAPI game/microphone audio, common clock synchronization, device changes.
 - [ ] Benchmark frame times and memory before adding a tray/settings interface.
 
