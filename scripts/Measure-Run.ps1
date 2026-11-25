@@ -7,9 +7,17 @@ param(
     [Parameter(Mandatory=$true)][string]$Scenario,
     [ValidateRange(10,3600)][int]$Seconds = 120,
     [ValidateRange(0,120)][int]$Countdown = 15,
-    [string]$OutputRoot = (Join-Path $PSScriptRoot '..\benchmarks')
+    [string]$OutputRoot = ''
 )
 $ErrorActionPreference = 'Stop'
+# Resolve script-relative defaults after parameter binding.
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $scriptDirectory = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    $OutputRoot = Join-Path $scriptDirectory '..\benchmarks'
+}
 $inv = [Globalization.CultureInfo]::InvariantCulture
 function Number($value) { if ($null -eq $value) { return '' }; return $value.ToString('G17', $inv) }
 $pmPath = (Resolve-Path -LiteralPath $PresentMon).Path
