@@ -9,3 +9,6 @@
 /capabilities.txt
 
 /clips/
+
+/benchmarks/
+__pycache__/

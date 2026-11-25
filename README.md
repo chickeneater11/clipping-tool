@@ -115,3 +115,9 @@ accepted GPU-backed input. Existing buffer tests were run by the user; their
 detailed results were not captured here. The user verified a playable MP4 recording: 600 submitted frames, no missed slots
 or pool drops in a ten-second RTX 2060 run. The user also verified a playable 30-second replay with synchronous F8 saving.
 The new background worker/shared-memory policy is not yet verified on Windows.
+
+## Measure game FPS and total RAM
+
+See [the benchmark workflow](docs/benchmark.md) for paired League replay runs,
+PresentMon frame intervals, process RAM/CPU sampling, and a ten-minute memory test.
+The collector runs on Windows; the Python analyzer uses only the standard library.
