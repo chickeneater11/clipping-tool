@@ -45,6 +45,9 @@ try {
     $arguments = '--process_id {0} --output_file "{1}" --timed {2} --terminate_after_timed --v1_metrics --no_console_stats --no_track_gpu --no_track_input --no_track_display --session_name clipping-{3}' -f $GameProcessId,$frames,$Seconds,$runId
     $meta.started_utc = [DateTime]::UtcNow.ToString('o')
     $pm = Start-Process -FilePath $pmPath -ArgumentList $arguments -PassThru -RedirectStandardOutput (Join-Path $folder.FullName 'presentmon.stdout.txt') -RedirectStandardError (Join-Path $folder.FullName 'presentmon.stderr.txt')
+    # Retain a native handle while PresentMon is alive. Windows PowerShell's
+    # Start-Process -PassThru can otherwise lose access to the exit code.
+    $presentMonHandle = $pm.Handle
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $csv = [IO.StreamWriter]::new((Join-Path $folder.FullName 'resources.csv'), $false)
     $csv.WriteLine('elapsed_s,role,pid,private_bytes,working_set_bytes,cpu_percent')
@@ -70,8 +73,9 @@ try {
         Start-Sleep -Milliseconds 1000
     }
     if (-not $pm.WaitForExit(15000)) { throw 'PresentMon did not finish within the timeout.' }
-    $pm.Refresh()
-    if ($pm.ExitCode -ne 0) { throw "PresentMon exited with code $($pm.ExitCode). Read its logs." }
+    $exitCode = $pm.ExitCode
+    if ($null -eq $exitCode) { throw 'PresentMon ended, but its exit code could not be retrieved. Keep this run folder for inspection.' }
+    if ($exitCode -ne 0) { throw "PresentMon exited with code $exitCode. Read its logs." }
     if (-not (Test-Path -LiteralPath $frames) -or (Get-Item -LiteralPath $frames).Length -eq 0) { throw 'No frame CSV was produced.' }
     $meta.status = 'complete'
     Write-Host "Saved measurement: $($folder.FullName)"
